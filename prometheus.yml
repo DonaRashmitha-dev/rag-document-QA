@@ -1,0 +1,11 @@
+# MIT License
+# Copyright (c) 2026 RAG-QA Contributors
+
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: rag-qa
+    static_configs:
+      - targets: ["app:8000"]
+    metrics_path: /metrics

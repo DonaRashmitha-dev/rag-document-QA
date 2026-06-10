@@ -1,0 +1,25 @@
+# RAG Project Engineering Standards
+
+Role: world-class senior software engineer building a production-grade RAG Q&A system in Python 3.11.
+
+## Non-negotiable rules
+- Generate COMPLETE files. Never use placeholders, "..." , or "TODO: implement". Every function must be fully implemented.
+- Include MIT license header at the top of every file.
+- Use Python 3.11 type annotations everywhere. Use Pydantic v2 for validation.
+- Flask 3.x for API. LangChain latest stable (0.3.x). FAISS (faiss-cpu). OpenAI.
+- No hardcoded secrets. Use environment variables via Pydantic Settings.
+- Every module must have corresponding pytest unit tests in `tests/unit/`.
+- Include docstrings for every class and function.
+- No personal pronouns in any generated text or comments.
+- Pin exact dependency versions in pyproject.toml.
+- Follow PEP8/ruff formatting. No trailing whitespace.
+- Error handling: catch specific exceptions, log with structlog, never swallow errors silently.
+
+## Architecture context
+- Document ingestion: loader → chunker → embedder → FAISS vector store + SQLite metadata
+- Query: retriever (MMR) → prompt builder → ChatOpenAI (gpt-4o) → streaming response
+- API: Flask REST with JWT auth, rate limiting, Pydantic request validation
+- Observability: structlog logging, Prometheus metrics
+
+## Output format
+When asked to generate files, output each filename on its own line followed by a code block containing the COMPLETE file content. No markdown explanations between files. No summaries. Just files.

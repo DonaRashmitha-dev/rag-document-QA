@@ -1,0 +1,193 @@
+# MIT License
+# Copyright (c) 2026 RAG-QA Contributors
+
+openapi: 3.1.0
+info:
+  title: RAG Document Q&A API
+  description: Production-grade Retrieval-Augmented Generation pipeline for document Q&A
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8000
+    description: Local development
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: healthCheck
+      tags: [System]
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "503":
+          description: Service is degraded
+
+  /ingest:
+    post:
+      summary: Upload and index a document
+      operationId: ingestDocument
+      tags: [Documents]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                doc_name:
+                  type: string
+                  description: Optional filename override
+      responses:
+        "200":
+          description: Document indexed successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestResponse"
+        "400":
+          description: Invalid request
+        "401":
+          description: Unauthorized
+        "413":
+          description: File too large
+
+  /query:
+    post:
+      summary: Ask a question against indexed documents
+      operationId: queryDocuments
+      tags: [Query]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueryRequest"
+      responses:
+        "200":
+          description: Answer generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryResponse"
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE stream of answer tokens
+        "400":
+          description: Invalid request
+        "401":
+          description: Unauthorized
+        "429":
+          description: Rate limit exceeded
+
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      operationId: getMetrics
+      tags: [System]
+      responses:
+        "200":
+          description: Prometheus text exposition format
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        faiss_chunks:
+          type: integer
+          example: 1053
+        uptime_s:
+          type: integer
+          example: 3600
+
+    IngestResponse:
+      type: object
+      properties:
+        doc_id:
+          type: string
+          example: d7a3f1c2
+        filename:
+          type: string
+          example: policy.pdf
+        num_chunks:
+          type: integer
+          example: 47
+        status:
+          type: string
+          example: indexed
+
+    QueryRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          example: What is the refund policy?
+        top_k:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 5
+
+    SourceAttribution:
+      type: object
+      properties:
+        doc_id:
+          type: string
+        filename:
+          type: string
+        page:
+          type: integer
+          nullable: true
+        chunk_index:
+          type: integer
+        score:
+          type: number
+          format: float
+
+    TokenUsage:
+      type: object
+      properties:
+        prompt:
+          type: integer
+        completion:
+          type: integer
+
+    QueryResponse:
+      type: object
+      properties:
+        answer:
+          type: string
+        sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceAttribution"
+        tokens_used:
+          $ref: "#/components/schemas/TokenUsage"
+        latency_ms:
+          type: integer

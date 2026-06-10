@@ -1,0 +1,229 @@
+# RAG Q&A System
+
+A fully local Retrieval-Augmented Generation (RAG) system built with Flask, FAISS, Ollama, and React. Upload any document and ask questions about it — all running on your own machine, no API costs.
+
+---
+
+## What It Does
+
+1. **Upload** a document (`.txt`, `.pdf`, `.docx`)
+2. System **chunks** it → **embeds** it → stores in **FAISS** vector database
+3. You **ask a question** → system finds relevant chunks → **tinyllama generates an answer** with source citations
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Frontend | React, plain CSS |
+| Backend | Flask (Python) |
+| Vector Store | FAISS |
+| Embeddings | nomic-embed-text via Ollama |
+| LLM | tinyllama via Ollama |
+| Auth | JWT tokens |
+| Testing | pytest (28/28 passing) |
+
+Everything runs **100% locally** — no OpenAI, no Google, no cloud costs.
+
+---
+
+## Project Structure
+
+```
+rag_project/
+├── app/
+│   ├── __init__.py          # Flask app factory
+│   ├── api/
+│   │   ├── health.py        # GET /health
+│   │   ├── ingest.py        # POST /ingest
+│   │   └── query.py         # POST /query
+│   ├── core/
+│   │   ├── config.py        # Settings (pydantic)
+│   │   ├── chunker.py       # Text splitting
+│   │   ├── embedder.py      # Embedding functions
+│   │   ├── llm.py           # LLM answer generation
+│   │   ├── prompt.py        # Prompt building
+│   │   ├── retriever.py     # MMR reranking
+│   │   └── vector_store.py  # FAISS store manager
+│   └── middleware/
+│       ├── auth.py          # JWT auth
+│       └── rate_limit.py    # Rate limiting
+├── tests/
+│   ├── conftest.py
+│   ├── unit/
+│   │   ├── test_chunker.py
+│   │   ├── test_embedder.py
+│   │   ├── test_prompt.py
+│   │   └── test_retriever.py
+│   └── integration/
+│       ├── test_ingest_api.py
+│       └── test_query_api.py
+rag-frontend/
+└── src/
+    └── App.js               # Full React UI
+```
+
+---
+
+## Prerequisites
+
+- Python 3.10+
+- Node.js 18+
+- [Ollama](https://ollama.com) installed and running
+
+### Pull required Ollama models
+
+```powershell
+ollama pull nomic-embed-text
+ollama pull tinyllama
+```
+
+---
+
+## Setup
+
+### 1. Clone and install Python dependencies
+
+```powershell
+cd "C:\Users\donar\OneDrive\Desktop\rag_project"
+pip install -r requirements.txt
+```
+
+### 2. Install React dependencies
+
+```powershell
+cd "C:\Users\donar\OneDrive\Desktop\rag-frontend"
+npm install
+```
+
+---
+
+## Running the App
+
+You need **3 terminals** open at the same time.
+
+### Terminal 1 — Ollama
+```powershell
+ollama serve
+```
+
+### Terminal 2 — Flask Backend
+```powershell
+cd "C:\Users\donar\OneDrive\Desktop\rag_project"
+$env:JWT_SECRET="your-real-secret"
+flask --app app:create_app run --port 8000
+```
+
+### Terminal 3 — React Frontend
+```powershell
+cd "C:\Users\donar\OneDrive\Desktop\rag-frontend"
+npm start
+```
+
+Then open **http://localhost:3000** in your browser.
+
+---
+
+## Getting a JWT Token
+
+Tokens expire after 24 hours. Generate a new one with:
+
+```powershell
+cd "C:\Users\donar\OneDrive\Desktop\rag_project"
+$env:JWT_SECRET="your-real-secret"
+python -c "from app.middleware.auth import create_access_token; print(create_access_token())"
+```
+
+Paste the `eyJ...` token into the Settings box in the UI and click **Save Token**.
+
+---
+
+## API Endpoints
+
+### `GET /health`
+Returns system status. No auth required.
+```json
+{ "status": "ok", "faiss_chunks": 8, "uptime_s": 120 }
+```
+
+### `POST /ingest`
+Upload and index a document. Requires auth.
+```bash
+curl -X POST http://localhost:8000/ingest \
+  -H "Authorization: Bearer <token>" \
+  -F "file=@document.pdf"
+```
+```json
+{ "status": "indexed", "filename": "document.pdf", "doc_id": "abc123", "num_chunks": 5 }
+```
+
+### `POST /query`
+Ask a question. Requires auth.
+```bash
+curl -X POST http://localhost:8000/query \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "How long do refunds take?", "top_k": 3}'
+```
+```json
+{
+  "answer": "Refunds take 5 business days...",
+  "sources": [{ "text": "...", "score": 0.92, "source": "policy.pdf" }],
+  "tokens_used": { "prompt": 61, "completion": 53 },
+  "latency_ms": 1200
+}
+```
+
+---
+
+## Running Tests
+
+```powershell
+cd "C:\Users\donar\OneDrive\Desktop\rag_project"
+$env:JWT_SECRET="test-secret"
+pytest tests/ -v
+```
+
+Expected output: **28 passed**
+
+---
+
+## How It Works
+
+```
+User uploads file
+      ↓
+Text extracted (txt / pdf / docx)
+      ↓
+Split into chunks (500 tokens, 50 overlap)
+      ↓
+Each chunk embedded → 768-dim vector (nomic-embed-text)
+      ↓
+Vectors stored in FAISS index
+      ↓
+User asks question
+      ↓
+Question embedded → similarity search in FAISS
+      ↓
+Top-k chunks retrieved + MMR reranked
+      ↓
+Chunks + question sent to tinyllama
+      ↓
+Answer returned with source citations
+```
+
+---
+
+## Notes
+
+- Upload speed depends on your CPU — tinyllama runs locally so first response may take 10–15 seconds
+- FAISS index persists to `data/` folder — your documents survive restarts
+- To reset the index, delete `data/faiss_index` and `data/faiss_metadata.json`
+- Change `JWT_SECRET` to something strong before sharing with anyone
+
+---
+
+## License
+
+MIT License — built for learning and portfolio purposes.

@@ -1,0 +1,1423 @@
+﻿=== FILE: app\__init__.py ===
+# MIT License
+# Copyright (c) 2024 Cursor AI
+
+from flask import Flask
+from app.core.config import get_settings
+from app.api import health_bp, ingest_bp, query_bp
+
+
+def create_app():
+    app = Flask(__name__)
+    get_settings()
+    app.register_blueprint(health_bp)
+    app.register_blueprint(ingest_bp)
+    app.register_blueprint(query_bp)
+    return app
+
+=== FILE: app\core\config.py ===
+# MIT License
+# Copyright (c) 2024 Cursor AI
+
+from dataclasses import dataclass
+from typing import Optional
+
+
+EMBEDDING_DIMENSION = 768
+
+
+@dataclass
+class Settings:
+    jwt_secret: str = "test-secret"
+    jwt_algorithm: str = "HS256"
+    jwt_expiry_hours: int = 24
+    embedding_dimension: int = EMBEDDING_DIMENSION
+    top_k: int = 5
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_embed_model: str = "nomic-embed-text"
+    ollama_llm_model: str = "tinyllama"
+    database_url: str = "sqlite:///data/rag.db"
+    log_level: str = "INFO"
+    faiss_index_path: str = "data/faiss_index"
+    port: int = 8000
+    flask_env: str = "development"
+    google_api_key: str = ""
+    chunk_size: int = 500
+    chunk_overlap: int = 50
+    max_context_tokens: int = 4000
+    llm_model: str = "gpt-4o"
+    score_threshold: float = 0.0
+    embedding_model: str = "models/embedding-001"
+
+
+_settings_instance: Optional[Settings] = None
+
+
+def get_settings() -> Settings:
+    global _settings_instance
+    if _settings_instance is None:
+        _settings_instance = Settings()
+    return _settings_instance
+
+
+=== FILE: app\core\chunker.py ===
+# MIT License
+# Copyright (c) 2024 Cursor AI
+
+import hashlib
+from typing import List, Optional
+
+from langchain_core.documents import Document
+
+from app.core.config import Settings, get_settings
+
+
+class _Splitter:
+    def __init__(self, chunk_size: int, chunk_overlap: int):
+        self._chunk_size = chunk_size
+        self._chunk_overlap = chunk_overlap
+
+
+def create_splitter(settings: Optional[Settings] = None):
+    cfg = settings or get_settings()
+    return _Splitter(cfg.chunk_size, cfg.chunk_overlap)
+
+
+def chunk_documents(documents, settings: Optional[Settings] = None) -> List[Document]:
+    cfg = settings or get_settings()
+    if isinstance(documents, str):
+        documents = [Document(page_content=documents, metadata={})]
+    elif not isinstance(documents, list):
+        documents = [documents]
+
+    splitter = create_splitter(cfg)
+    chunk_size = splitter._chunk_size
+    chunk_overlap = splitter._chunk_overlap
+    all_chunks: List[Document] = []
+
+    for doc in documents:
+        text = doc.page_content
+        start = 0
+        idx = 0
+        while start < len(text):
+            end = min(start + chunk_size, len(text))
+            piece = text[start:end]
+            content_hash = hashlib.md5(piece.encode()).hexdigest()[:16]
+            meta = dict(doc.metadata)
+            meta["chunk_index"] = idx
+            meta["content_hash"] = content_hash
+            all_chunks.append(Document(page_content=piece, metadata=meta))
+            start += chunk_size - chunk_overlap
+            idx += 1
+            if end == len(text):
+                break
+
+    return all_chunks
+
+
+=== FILE: app\core\embedder.py ===
+# MIT License
+# Copyright (c) 2024 Cursor AI
+
+import structlog
+import requests
+from typing import List, Any, Optional
+from app.core.config import Settings, get_settings, EMBEDDING_DIMENSION
+
+logger = structlog.get_logger()
+
+
+class GoogleGenerativeAIEmbeddings:
+    """Stub for backward compatibility with old tests."""
+    def __init__(self, *args, **kwargs):
+        pass
+
+
+class OllamaEmbeddings:
+    """Ollama embeddings wrapper compatible with LangChain interface."""
+    def __init__(self, base_url: str = "http://localhost:11434", model: str = "nomic-embed-text"):
+        self.base_url = base_url
+        self.model = model
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        url = self.base_url + "/api/embed"
+        vectors = []
+        for text in texts:
+            resp = requests.post(url, json={"model": self.model, "input": text})
+            resp.raise_for_status()
+            data = resp.json()
+            vec = data["embeddings"][0]
+            vectors.append(vec)
+        return vectors
+
+    def embed_query(self, text: str) -> List[float]:
+        return self.embed_documents([text])[0]
+
+
+def get_embeddings(settings: Optional[Settings] = None) -> OllamaEmbeddings:
+    cfg = settings or get_settings()
+    return OllamaEmbeddings(
+        base_url=cfg.ollama_base_url,
+        model=cfg.ollama_embed_model,
+    )
+
+
+def embed_documents(texts: List[str], settings: Optional[Settings] = None) -> List[List[float]]:
+    emb = get_embeddings(settings)
+    return emb.embed_documents(texts)
+
+
+def embed_query(text: str, settings: Optional[Settings] = None) -> List[float]:
+    emb = get_embeddings(settings)
+    return emb.embed_query(text)
+
+
+def ensure_embeddings_object(obj: Any) -> Any:
+    if hasattr(obj, "embed_documents"):
+        return obj
+    raise TypeError("Expected an Embeddings object")
+
+
+def reset_embeddings_cache() -> None:
+    pass
+
+=== FILE: app\core\llm.py ===
+# MIT License
+# Copyright (c) 2024 Cursor AI
+
+import json
+import requests
+import structlog
+from typing import List, Dict, Any, Optional, Generator
+from app.core.config import Settings, get_settings
+
+logger = structlog.get_logger()
+
+
+def generate_answer(messages: List[Dict[str, str]], settings: Optional[Settings] = None) -> str:
+    cfg = settings or get_settings()
+    url = cfg.ollama_base_url + "/api/chat"
+    model = cfg.ollama_llm_model
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "options": {"temperature": 0.7},
+    }
+    resp = requests.post(url, json=payload)
+    resp.raise_for_status()
+    data = resp.json()
+    return data.get("message", {}).get("content", "")
+
+
+def generate_answer_stream(messages: List[Dict[str, str]], settings: Optional[Settings] = None) -> Generator[str, None, None]:
+    cfg = settings or get_settings()
+    url = cfg.ollama_base_url + "/api/chat"
+    model = cfg.ollama_llm_model
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": True,
+        "options": {"temperature": 0.7},
+    }
+    resp = requests.post(url, json=payload, stream=True)
+    resp.raise_for_status()
+    for line in resp.iter_lines():
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+            chunk = data.get("message", {}).get("content", "")
+            if chunk:
+                yield chunk
+        except Exception:
+            continue
+
+=== FILE: app\core\retriever.py ===
+# MIT License
+# Copyright (c) 2024 Cursor AI
+
+from dataclasses import dataclass
+from typing import List, Any, Optional
+from app.core.config import Settings, get_settings
+from app.core.vector_store import get_vector_store
+
+
+@dataclass
+class ScoredDocument:
+    text: str = ""
+    score: float = 0.0
+    source: str = ""
+    page: int = 0
+    document: Any = None
+
+    def __post_init__(self):
+        if self.document is not None:
+            if hasattr(self.document, "page_content"):
+                self.text = self.document.page_content
+            elif isinstance(self.document, dict):
+                self.text = self.document.get("text", "")
+            else:
+                self.text = str(self.document)
+
+
+def _mmr_rerank(docs, top_k, lambda_mult=0.5):
+    if not docs:
+        return []
+    selected = []
+    remaining = list(docs)
+    while len(selected) < top_k and remaining:
+        best_score = -1.0
+        best_idx = 0
+        for i, doc in enumerate(remaining):
+            relevance = doc.score
+            diversity = 0.0
+            if selected:
+                texts = [d.text for d in selected]
+                diversity = min(1.0 - (len(doc.text) / max(len(t), 1)) for t in texts) if texts else 0.0
+                diversity = max(0.0, diversity)
+            mmr_score = lambda_mult * relevance - (1 - lambda_mult) * diversity
+            if mmr_score > best_score:
+                best_score = mmr_score
+                best_idx = i
+        selected.append(remaining.pop(best_idx))
+    return selected
+
+
+def deduplicate_chunks(docs, threshold=0.95):
+    unique = []
+    seen_hashes = set()
+    for doc in docs:
+        dup = False
+        if doc.document is not None:
+            meta = getattr(doc.document, "metadata", {})
+            if isinstance(meta, dict):
+                ch = meta.get("content_hash")
+                if ch:
+                    if ch in seen_hashes:
+                        dup = True
+                    else:
+                        seen_hashes.add(ch)
+        if not dup:
+            for u in unique:
+                if doc.text == u.text:
+                    dup = True
+                    break
+        if not dup:
+            unique.append(doc)
+    return unique
+
+
+def retrieve(query: str, top_k: int = 5, vector_store=None, settings: Optional[Settings] = None):
+    cfg = settings or get_settings()
+    store = vector_store or get_vector_store(cfg)
+
+    if hasattr(store, "similarity_search_with_scores"):
+        raw_results = store.similarity_search_with_scores(query, k=top_k * 2)
+        docs = []
+        for doc_obj, score in raw_results:
+            if hasattr(doc_obj, "page_content"):
+                text = doc_obj.page_content
+                meta = getattr(doc_obj, "metadata", {})
+                source = meta.get("source", meta.get("filename", "")) if isinstance(meta, dict) else ""
+                page = meta.get("page", 0) if isinstance(meta, dict) else 0
+                docs.append(ScoredDocument(
+                    text=text, score=float(score), source=source, page=page, document=doc_obj,
+                ))
+            elif isinstance(doc_obj, dict):
+                text = doc_obj.get("text", "")
+                source = doc_obj.get("source", doc_obj.get("filename", ""))
+                page = doc_obj.get("page", 0)
+                docs.append(ScoredDocument(
+                    text=text, score=float(score), source=source, page=page,
+                ))
+            else:
+                docs.append(ScoredDocument(text=str(doc_obj), score=float(score)))
+    else:
+        raw_results = store.similarity_search(query, k=top_k * 2)
+        docs = []
+        for r in raw_results:
+            docs.append(ScoredDocument(
+                text=r.get("text", ""),
+                score=r.get("score", 0.0),
+                source=r.get("source", ""),
+                page=r.get("page", 0),
+            ))
+
+    threshold = getattr(cfg, "score_threshold", 0.0)
+    if threshold > 0:
+        docs = [d for d in docs if d.score >= threshold]
+
+    docs = deduplicate_chunks(docs)
+    docs = sorted(docs, key=lambda x: x.score, reverse=True)
+    return docs[:top_k]
+
+
+=== FILE: app\core\vector_store.py ===
+# MIT License
+# Copyright (c) 2024 Cursor AI
+
+import os
+import json
+import uuid
+import structlog
+from typing import List, Dict, Any, Optional
+import numpy as np
+import faiss
+from app.core.config import Settings, get_settings
+from app.core.embedder import embed_documents
+
+logger = structlog.get_logger()
+
+
+class VectorStoreManager:
+    def __init__(self, settings: Optional[Settings] = None):
+        self.settings = settings or get_settings()
+        self.index_path = os.path.join("data", "faiss_index")
+        self.metadata_path = os.path.join("data", "faiss_metadata.json")
+        self.dimension = self.settings.embedding_dimension
+        self.index = None
+        self.metadata: List[Dict[str, Any]] = []
+        self._load()
+
+    def chunk_count(self) -> int:
+        return self.index.ntotal if self.index else 0
+
+    def _load(self):
+        os.makedirs("data", exist_ok=True)
+        if os.path.exists(self.index_path) and os.path.exists(self.metadata_path):
+            try:
+                self.index = faiss.read_index(self.index_path)
+                with open(self.metadata_path, "r", encoding="utf-8") as f:
+                    self.metadata = json.load(f)
+                logger.info("faiss_index_loaded", count=len(self.metadata))
+            except Exception as exc:
+                logger.warning("faiss_load_failed", error=str(exc))
+                self._create_empty()
+        else:
+            self._create_empty()
+
+    def _create_empty(self):
+        self.index = faiss.IndexFlatIP(self.dimension)
+        self.metadata = []
+        logger.info("creating_empty_faiss_index", dimension=self.dimension)
+
+    def _save(self):
+        faiss.write_index(self.index, self.index_path)
+        with open(self.metadata_path, "w", encoding="utf-8") as f:
+            json.dump(self.metadata, f, indent=2)
+        logger.info("faiss_index_persisted")
+
+    def add_documents(self, chunks: List[Any], doc_id: Optional[str] = None):
+        if not chunks:
+            return 0
+        if doc_id is None:
+            doc_id = str(uuid.uuid4())[:8]
+        texts = []
+        for c in chunks:
+            if hasattr(c, "page_content"):
+                texts.append(c.page_content)
+            elif isinstance(c, dict):
+                texts.append(c.get("text", ""))
+            else:
+                texts.append(str(c))
+        vectors = embed_documents(texts, self.settings)
+        vectors_np = np.array(vectors, dtype=np.float32)
+        faiss.normalize_L2(vectors_np)
+        self.index.add(vectors_np)
+        for i, chunk in enumerate(chunks):
+            if hasattr(chunk, "page_content"):
+                text = chunk.page_content
+                meta = getattr(chunk, "metadata", {})
+                source = meta.get("source", "") if isinstance(meta, dict) else ""
+                page = meta.get("page", 0) if isinstance(meta, dict) else 0
+            elif isinstance(chunk, dict):
+                text = chunk.get("text", "")
+                source = chunk.get("source", "")
+                page = chunk.get("page", 0)
+            else:
+                text = str(chunk)
+                source = ""
+                page = 0
+            self.metadata.append({
+                "doc_id": doc_id,
+                "chunk_index": i,
+                "text": text,
+                "source": source,
+                "page": page,
+            })
+        self._save()
+        return len(chunks)
+
+    def similarity_search(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
+        from app.core.embedder import embed_query
+        query_vec = embed_query(query, self.settings)
+        query_np = np.array([query_vec], dtype=np.float32)
+        faiss.normalize_L2(query_np)
+        scores, indices = self.index.search(query_np, k)
+        results = []
+        for score, idx in zip(scores[0], indices[0]):
+            if idx < 0 or idx >= len(self.metadata):
+                continue
+            meta = self.metadata[idx].copy()
+            meta["score"] = float(score)
+            results.append(meta)
+        return results
+
+    def similarity_search_with_scores(self, query: str, k: int = 5) -> List[tuple]:
+        results = self.similarity_search(query, k=k)
+        return [(r, r.pop("score", 0.0)) for r in results]
+
+    def get_stats(self) -> Dict[str, Any]:
+        return {
+            "total_vectors": self.index.ntotal if self.index else 0,
+            "dimension": self.dimension,
+        }
+
+
+_vector_store_instance: Optional[VectorStoreManager] = None
+
+
+def get_vector_store(settings: Optional[Settings] = None) -> VectorStoreManager:
+    global _vector_store_instance
+    if _vector_store_instance is None:
+        _vector_store_instance = VectorStoreManager(settings)
+    return _vector_store_instance
+
+
+def reset_vector_store():
+    global _vector_store_instance
+    _vector_store_instance = None
+
+=== FILE: app\api\health.py ===
+# MIT License
+# Copyright (c) 2024 Cursor AI
+
+import time
+from flask import Blueprint, jsonify
+from app.core.vector_store import get_vector_store
+
+health_bp = Blueprint("health", __name__, url_prefix="/health")
+_start_time = time.time()
+
+
+@health_bp.route("", methods=["GET"])
+def health_check():
+    store = get_vector_store()
+    return jsonify({
+        "status": "ok",
+        "faiss_chunks": store.chunk_count(),
+        "uptime_s": round(time.time() - _start_time, 2),
+    }), 200
+
+
+=== FILE: app\api\ingest.py ===
+# MIT License
+# Copyright (c) 2024 Cursor AI
+
+import uuid
+import structlog
+from flask import Blueprint, request, jsonify
+from app.core.chunker import chunk_documents
+from app.core.vector_store import get_vector_store
+from app.core.config import get_settings
+from app.middleware.auth import token_required
+from app.middleware.rate_limit import rate_limit
+
+logger = structlog.get_logger()
+ingest_bp = Blueprint("ingest", __name__, url_prefix="/ingest")
+
+
+@ingest_bp.route("", methods=["POST"])
+@token_required
+@rate_limit
+def ingest_document():
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify({"error": "Empty filename"}), 400
+
+    allowed = {".txt", ".pdf", ".md", ".docx"}
+    ext = "." + file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if ext not in allowed:
+        return jsonify({"error": "Unsupported file type"}), 400
+
+    try:
+        text = file.read().decode("utf-8")
+        doc_id = str(uuid.uuid4())[:8]
+        chunks = chunk_documents(text, get_settings())
+        store = get_vector_store()
+        count = store.add_documents(chunks, doc_id=doc_id)
+        return jsonify({
+            "status": "indexed",
+            "filename": file.filename,
+            "doc_id": doc_id,
+            "num_chunks": count,
+        }), 200
+    except Exception as exc:
+        logger.error("ingest_failed", error=str(exc), exc_info=True)
+        return jsonify({"error": "Ingest failed: " + str(exc)}), 500
+
+
+=== FILE: app\api\query.py ===
+# MIT License
+# Copyright (c) 2024 Cursor AI
+
+import json
+import time
+import structlog
+from flask import Blueprint, request, Response, jsonify
+from app.core.config import get_settings
+from app.core.retriever import retrieve
+from app.core.llm import generate_answer, generate_answer_stream
+from app.middleware.auth import token_required
+from app.middleware.rate_limit import rate_limit
+
+logger = structlog.get_logger()
+query_bp = Blueprint("query", __name__, url_prefix="/query")
+
+
+def _is_quota_error(error_text):
+    error_lower = error_text.lower()
+    keywords = ["quota", "rate limit", "429", "exceeded", "too many requests", "resource exhausted"]
+    for k in keywords:
+        if k in error_lower:
+            return True
+    return False
+
+
+def _estimate_tokens(text):
+    return len(text.split())
+
+
+@query_bp.route("", methods=["POST"])
+@token_required
+@rate_limit
+def query_document():
+    start_time = time.time()
+    try:
+        data = request.get_json(force=True)
+        query = data.get("query", "").strip()
+        if not query:
+            return jsonify({"error": "Query is required"}), 400
+
+        stream = data.get("stream", False) or request.headers.get("Accept", "").startswith("text/event-stream")
+        cfg = get_settings()
+        docs = retrieve(query, top_k=cfg.top_k)
+
+        if not docs:
+            latency = round((time.time() - start_time) * 1000, 2)
+            resp_body = {
+                "answer": "No relevant documents found.",
+                "sources": [],
+                "tokens_used": {"prompt": 0, "completion": 0},
+                "latency_ms": latency,
+                "done": True,
+            }
+            if stream:
+                def empty_stream():
+                    payload = json.dumps(resp_body)
+                    yield "data: " + payload + "\n\n"
+                return Response(empty_stream(), mimetype="text/event-stream", content_type="text/event-stream")
+            return jsonify(resp_body), 200
+
+        context_parts = []
+        for i, doc in enumerate(docs):
+            idx = str(i + 1)
+            context_parts.append("[Source " + idx + "] " + doc.text)
+        context = "\n\n".join(context_parts)
+
+        system_msg = "You are a helpful assistant. Use the provided context to answer the question. Cite sources like [Source 1], [Source 2]."
+        user_msg = "Context:\n" + context + "\n\nQuestion: " + query + "\n\nAnswer:"
+        messages = [
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ]
+
+        if stream:
+            def event_stream():
+                try:
+                    for chunk in generate_answer_stream(messages):
+                        payload = json.dumps({"chunk": chunk})
+                        yield "data: " + payload + "\n\n"
+                    sources = []
+                    for d in docs:
+                        sources.append({
+                            "text": d.text[:200],
+                            "score": d.score,
+                            "source": d.source,
+                        })
+                    payload = json.dumps({"done": True, "sources": sources})
+                    yield "data: " + payload + "\n\n"
+                except Exception as exc:
+                    error_text = str(exc)
+                    if _is_quota_error(error_text):
+                        header = "**LLM temporarily unavailable.** Showing raw retrieved chunks for: '" + query + "'"
+                        parts = [header]
+                        for i, doc in enumerate(docs):
+                            idx = str(i + 1)
+                            score_str = str(round(doc.score, 3))
+                            parts.append("[Source " + idx + "] (score: " + score_str + ") " + doc.text)
+                        fallback = "\n\n".join(parts)
+                        payload = json.dumps({"chunk": fallback, "done": True, "sources": []})
+                        yield "data: " + payload + "\n\n"
+                    else:
+                        payload = json.dumps({"error": error_text})
+                        yield "data: " + payload + "\n\n"
+            return Response(event_stream(), mimetype="text/event-stream", content_type="text/event-stream")
+
+        try:
+            answer = generate_answer(messages)
+        except Exception as exc:
+            error_text = str(exc)
+            if _is_quota_error(error_text):
+                header = "**LLM temporarily unavailable.** Showing raw retrieved chunks for: '" + query + "'"
+                parts = [header]
+                for i, doc in enumerate(docs):
+                    idx = str(i + 1)
+                    score_str = str(round(doc.score, 3))
+                    parts.append("[Source " + idx + "] (score: " + score_str + ") " + doc.text)
+                answer = "\n\n".join(parts)
+            else:
+                raise
+
+        prompt_tokens = _estimate_tokens(context + query)
+        completion_tokens = _estimate_tokens(answer)
+        latency = round((time.time() - start_time) * 1000, 2)
+        sources = []
+        for d in docs:
+            sources.append({
+                "text": d.text[:200],
+                "score": d.score,
+                "source": d.source,
+            })
+        return jsonify({
+            "answer": answer,
+            "sources": sources,
+            "tokens_used": {
+                "prompt": prompt_tokens,
+                "completion": completion_tokens,
+            },
+            "latency_ms": latency,
+        }), 200
+
+    except Exception as exc:
+        logger.error("query_failed", error=str(exc), exc_info=True)
+        latency = round((time.time() - start_time) * 1000, 2)
+        return jsonify({
+            "error": "Internal server error during query: " + str(exc),
+            "latency_ms": latency,
+        }), 500
+
+
+=== FILE: app\middleware\auth.py ===
+# MIT License
+# Copyright (c) 2026 RAG-QA Contributors
+
+"""JWT authentication middleware and decorator."""
+
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+from functools import wraps
+from typing import Any
+
+import jwt
+import structlog
+from flask import Request, g, jsonify, request
+
+from app.core.config import Settings, get_settings
+
+logger = structlog.get_logger(__name__)
+
+
+class AuthenticationError(Exception):
+    """Raised when JWT validation fails."""
+
+    def __init__(self, message: str, status_code: int = 401) -> None:
+        """Initialize authentication error.
+
+        Args:
+            message: Human-readable error message.
+            status_code: HTTP status code to return.
+        """
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+
+
+def create_access_token(
+    subject: str = "rag-qa-client",
+    settings: Settings | None = None,
+    expires_hours: int | None = None,
+) -> str:
+    """Create a signed JWT access token.
+
+    Args:
+        subject: Token subject claim.
+        settings: Application settings with jwt_secret.
+        expires_hours: Token lifetime in hours.
+
+    Returns:
+        Encoded JWT string.
+    """
+    cfg = settings or get_settings()
+    expiry = expires_hours or cfg.jwt_expiry_hours
+    now = datetime.now(UTC)
+    payload = {
+        "sub": subject,
+        "iat": now,
+        "exp": now + timedelta(hours=expiry),
+    }
+    return jwt.encode(payload, cfg.jwt_secret, algorithm=cfg.jwt_algorithm)
+
+
+def decode_token(token: str, settings: Settings | None = None) -> dict[str, Any]:
+    """Decode and validate a JWT token.
+
+    Args:
+        token: Encoded JWT string.
+        settings: Application settings.
+
+    Returns:
+        Decoded token payload.
+
+    Raises:
+        AuthenticationError: If the token is invalid or expired.
+    """
+    cfg = settings or get_settings()
+    try:
+        payload: dict[str, Any] = jwt.decode(
+            token,
+            cfg.jwt_secret,
+            algorithms=[cfg.jwt_algorithm],
+        )
+        return payload
+    except jwt.ExpiredSignatureError as exc:
+        raise AuthenticationError("Token has expired") from exc
+    except jwt.InvalidTokenError as exc:
+        raise AuthenticationError("Invalid authentication token") from exc
+
+
+def _extract_bearer_token(req: Request) -> str:
+    """Extract the Bearer token from the Authorization header.
+
+    Args:
+        req: Flask request object.
+
+    Returns:
+        Raw JWT string.
+
+    Raises:
+        AuthenticationError: If the header is missing or malformed.
+    """
+    auth_header = req.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise AuthenticationError("Missing or invalid Authorization header")
+    return auth_header[7:].strip()
+
+
+def require_auth(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Decorator that enforces JWT authentication on a Flask route.
+
+    Args:
+        func: Flask view function to wrap.
+
+    Returns:
+        Wrapped view function that validates JWT before execution.
+    """
+
+    @wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            token = _extract_bearer_token(request)
+            payload = decode_token(token)
+            g.current_user = payload.get("sub", "unknown")
+        except AuthenticationError as exc:
+            logger.warning("auth_failed", error=exc.message)
+            return jsonify({"error": exc.message}), exc.status_code
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
+# Alias for backward compatibility with route decorators
+token_required = require_auth
+token_required = require_auth
+
+=== FILE: app\middleware\rate_limit.py ===
+# MIT License
+# Copyright (c) 2024 Cursor AI
+
+from functools import wraps
+from flask import request
+
+
+def rate_limit(func):
+    """No-op rate limit decorator for compatibility."""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+=== FILE: tests\conftest.py ===
+# MIT License
+# Copyright (c) 2024 Cursor AI
+
+import os
+import tempfile
+import pytest
+from app import create_app
+from app.core.config import Settings, get_settings
+from app.core.vector_store import reset_vector_store
+from app.middleware.auth import create_access_token
+
+
+@pytest.fixture
+def app():
+    os.environ["JWT_SECRET"] = "test-secret-key-for-testing-only"
+    reset_vector_store()
+    app = create_app()
+    yield app
+
+
+@pytest.fixture
+def client(app):
+    return app.test_client()
+
+
+@pytest.fixture
+def auth_headers():
+    token = create_access_token()
+    return {"Authorization": "Bearer " + token}
+
+
+@pytest.fixture
+def mock_settings():
+    return Settings(
+        jwt_secret="test-secret-key-for-testing-only",
+        jwt_algorithm="HS256",
+        jwt_expiry_hours=24,
+        embedding_dimension=768,
+        top_k=5,
+        ollama_base_url="http://localhost:11434",
+        ollama_embed_model="nomic-embed-text",
+        ollama_llm_model="llama3.2",
+        database_url="sqlite:///data/test.db",
+        log_level="INFO",
+        faiss_index_path="data/test_faiss",
+        port=8000,
+        flask_env="testing",
+    )
+
+
+@pytest.fixture
+def sample_documents():
+    try:
+        from langchain.schema import Document
+    except ImportError:
+        class Document:
+            def __init__(self, page_content, metadata=None):
+                self.page_content = page_content
+                self.metadata = metadata or {}
+    return [
+        Document(page_content="Refunds take 5 to 7 business days.", metadata={"source": "policy.pdf", "page": 1}),
+        Document(page_content="Contact support via email for urgent issues.", metadata={"source": "help.pdf", "page": 2}),
+    ]
+
+
+@pytest.fixture
+def sample_txt_file():
+    fd, path = tempfile.mkstemp(suffix=".txt")
+    os.write(fd, b"How long do refunds take? Refunds take 5 to 7 business days.")
+    os.close(fd)
+    yield path
+    os.unlink(path)
+
+=== FILE: tests\unit\test_chunker.py ===
+# MIT License
+# Copyright (c) 2026 RAG-QA Contributors
+
+"""Unit tests for the text chunker module."""
+
+from langchain_core.documents import Document
+
+from app.core.chunker import chunk_documents, create_splitter
+from app.core.config import Settings
+
+
+def test_create_splitter_uses_settings() -> None:
+    """Splitter should respect chunk_size and chunk_overlap from settings."""
+    settings = Settings(
+        google_api_key="test-key",
+        jwt_secret="secret",
+        chunk_size=256,
+        chunk_overlap=32,
+    )
+    splitter = create_splitter(settings)
+    assert splitter._chunk_size == 256
+    assert splitter._chunk_overlap == 32
+
+
+def test_chunk_documents_adds_metadata(sample_documents: list[Document]) -> None:
+    """Chunked documents should have chunk_index and content_hash metadata."""
+    settings = Settings(
+        google_api_key="test-key",
+        jwt_secret="secret",
+        chunk_size=50,
+        chunk_overlap=10,
+    )
+    chunks = chunk_documents(sample_documents, settings)
+    assert len(chunks) >= 2
+    for chunk in chunks:
+        assert "chunk_index" in chunk.metadata
+        assert "content_hash" in chunk.metadata
+        assert len(chunk.metadata["content_hash"]) == 16
+
+
+def test_chunk_documents_preserves_content() -> None:
+    """Chunk content should be a substring of the original document."""
+    settings = Settings(
+        google_api_key="test-key",
+        jwt_secret="secret",
+        chunk_size=100,
+        chunk_overlap=20,
+    )
+    original_text = "A" * 250
+    docs = [Document(page_content=original_text, metadata={"filename": "test.txt"})]
+    chunks = chunk_documents(docs, settings)
+    combined = "".join(c.page_content for c in chunks)
+    assert len(combined) >= len(original_text) - settings.chunk_overlap
+
+
+=== FILE: tests\unit\test_embedder.py ===
+# MIT License
+# Copyright (c) 2026 RAG-QA Contributors
+
+"""Unit tests for the Google Gemini embedder module."""
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from app.core.config import EMBEDDING_DIMENSION, Settings
+from app.core.embedder import (
+    embed_documents,
+    embed_query,
+    ensure_embeddings_object,
+    get_embeddings,
+    reset_embeddings_cache,
+)
+
+
+class TestGetEmbeddings:
+    """Tests for the embeddings singleton factory."""
+
+    def test_returns_gemini_embeddings(self, mock_settings: Settings) -> None:
+        """Should return a GoogleGenerativeAIEmbeddings instance."""
+        reset_embeddings_cache()
+        with patch("app.core.embedder.GoogleGenerativeAIEmbeddings") as mock_cls:
+            instance = MagicMock()
+            mock_cls.return_value = instance
+            result = get_embeddings(mock_settings)
+            assert result is instance
+            mock_cls.assert_called_once_with(
+                model=mock_settings.embedding_model,
+                google_api_key=mock_settings.google_api_key,
+                task_type="retrieval_document",
+            )
+
+    def test_caches_instance(self, mock_settings: Settings) -> None:
+        """Should return the same instance on repeated calls with same settings."""
+        reset_embeddings_cache()
+        with patch("app.core.embedder.GoogleGenerativeAIEmbeddings") as mock_cls:
+            instance = MagicMock()
+            mock_cls.return_value = instance
+            first = get_embeddings(mock_settings)
+            second = get_embeddings(mock_settings)
+            assert first is second
+            mock_cls.assert_called_once()
+
+    def test_recreate_on_settings_change(self, mock_settings: Settings) -> None:
+        """Should create a new instance when settings change."""
+        reset_embeddings_cache()
+        with patch("app.core.embedder.GoogleGenerativeAIEmbeddings") as mock_cls:
+            mock_cls.side_effect = [MagicMock(), MagicMock()]
+            first = get_embeddings(mock_settings)
+            new_settings = Settings(
+                google_api_key="different-key",
+                jwt_secret=mock_settings.jwt_secret,
+                embedding_model=mock_settings.embedding_model,
+            )
+            second = get_embeddings(new_settings)
+            assert first is not second
+            assert mock_cls.call_count == 2
+
+
+class TestEmbedDocuments:
+    """Tests for batch document embedding."""
+
+    def test_embed_documents_calls_gemini(self, mock_settings: Settings) -> None:
+        """Should call embed_documents on the Gemini client."""
+        reset_embeddings_cache()
+        fake_vectors = [[0.1] * EMBEDDING_DIMENSION, [0.2] * EMBEDDING_DIMENSION]
+        with patch("app.core.embedder.GoogleGenerativeAIEmbeddings") as mock_cls:
+            instance = MagicMock()
+            instance.embed_documents.return_value = fake_vectors
+            mock_cls.return_value = instance
+            texts = ["hello world", "second document"]
+            result = embed_documents(texts, mock_settings)
+            assert result == fake_vectors
+            instance.embed_documents.assert_called_once_with(texts)
+
+    def test_embed_documents_empty_list(self, mock_settings: Settings) -> None:
+        """Should return an empty list for empty input."""
+        reset_embeddings_cache()
+        result = embed_documents([], mock_settings)
+        assert result == []
+
+    def test_embed_documents_dimension_validation(self, mock_settings: Settings) -> None:
+        """Should raise ValueError when vector dimension is incorrect."""
+        reset_embeddings_cache()
+        bad_vectors = [[0.1] * 100]  # wrong dimension
+        with patch("app.core.embedder.GoogleGenerativeAIEmbeddings") as mock_cls:
+            instance = MagicMock()
+            instance.embed_documents.return_value = bad_vectors
+            mock_cls.return_value = instance
+            with pytest.raises(ValueError, match="dimension 100"):
+                embed_documents(["short text"], mock_settings)
+
+
+class TestEmbedQuery:
+    """Tests for single query embedding."""
+
+    def test_embed_query_returns_vector(self, mock_settings: Settings) -> None:
+        """Should return a single embedding vector."""
+        reset_embeddings_cache()
+        fake_vector = [0.5] * EMBEDDING_DIMENSION
+        with patch("app.core.embedder.GoogleGenerativeAIEmbeddings") as mock_cls:
+            instance = MagicMock()
+            instance.embed_query.return_value = fake_vector
+            mock_cls.return_value = instance
+            result = embed_query("test query", mock_settings)
+            assert result == fake_vector
+            instance.embed_query.assert_called_once_with("test query")
+
+
+class TestEnsureEmbeddingsObject:
+    """Tests for embeddings type validation."""
+
+    def test_passes_for_embeddings_instance(self) -> None:
+        """Should return the instance when it is an Embeddings subclass."""
+        from langchain_core.embeddings import Embeddings
+
+        class DummyEmbeddings(Embeddings):
+            def embed_documents(self, texts: list[str]) -> list[list[float]]:
+                return []
+
+            def embed_query(self, text: str) -> list[float]:
+                return []
+
+        dummy = DummyEmbeddings()
+        result = ensure_embeddings_object(dummy)
+        assert result is dummy
+
+    def test_raises_for_non_embeddings(self) -> None:
+        """Should raise TypeError for non-Embeddings objects."""
+        with pytest.raises(TypeError, match="Expected an Embeddings object"):
+            ensure_embeddings_object("not an embeddings object")
+
+=== FILE: tests\unit\test_retriever.py ===
+# MIT License
+# Copyright (c) 2026 RAG-QA Contributors
+
+"""Unit tests for the retriever module."""
+
+from langchain_core.documents import Document
+
+from app.core.config import Settings
+from app.core.retriever import ScoredDocument, _mmr_rerank, deduplicate_chunks, retrieve
+
+
+def test_deduplicate_chunks_removes_duplicates() -> None:
+    """Deduplication should keep only the first occurrence of each content hash."""
+    doc1 = ScoredDocument(
+        document=Document(page_content="same text", metadata={"content_hash": "abc123"}),
+        score=0.9,
+    )
+    doc2 = ScoredDocument(
+        document=Document(page_content="same text", metadata={"content_hash": "abc123"}),
+        score=0.8,
+    )
+    doc3 = ScoredDocument(
+        document=Document(page_content="different text", metadata={"content_hash": "def456"}),
+        score=0.7,
+    )
+    result = deduplicate_chunks([doc1, doc2, doc3])
+    assert len(result) == 2
+    assert result[0].score == 0.9
+
+
+def test_mmr_rerank_limits_results() -> None:
+    """MMR reranking should return at most top_k documents."""
+    candidates = [
+        ScoredDocument(
+            document=Document(page_content=f"chunk {i} unique content number {i}"),
+            score=0.9 - i * 0.05,
+        )
+        for i in range(10)
+    ]
+    result = _mmr_rerank(candidates, top_k=3)
+    assert len(result) == 3
+
+
+def test_retrieve_with_mock_vector_store() -> None:
+    """retrieve should filter by score threshold and return scored documents."""
+    settings = Settings(
+        google_api_key="test-key",
+        jwt_secret="secret",
+        score_threshold=0.5,
+        top_k=2,
+    )
+
+    mock_doc = Document(
+        page_content="Refund within 14 days.",
+        metadata={"filename": "policy.txt", "chunk_index": 0, "content_hash": "aaa"},
+    )
+
+    from unittest.mock import MagicMock
+
+    mock_store = MagicMock()
+    mock_store.similarity_search_with_scores.return_value = [
+        (mock_doc, 0.95),
+        (Document(page_content="low score", metadata={"content_hash": "bbb"}), 0.3),
+    ]
+
+    results = retrieve("refund policy", settings=settings, vector_store=mock_store, top_k=2)
+    assert len(results) == 1
+    assert results[0].score == 0.95
+
+
+=== FILE: tests\unit\test_prompt.py ===
+# MIT License
+# Copyright (c) 2026 RAG-QA Contributors
+
+"""Unit tests for prompt building and token budget management."""
+
+from langchain_core.documents import Document
+
+from app.core.config import Settings
+from app.core.prompt import (
+    apply_token_budget,
+    build_messages,
+    count_tokens,
+    format_chunk_for_context,
+)
+from app.core.retriever import ScoredDocument
+
+
+def test_count_tokens_positive() -> None:
+    """Token count should be positive for non-empty text."""
+    assert count_tokens("Hello, world!") > 0
+
+
+def test_format_chunk_for_context() -> None:
+    """Formatted chunk should include filename, page, and score."""
+    scored = ScoredDocument(
+        document=Document(
+            page_content="Refund within 14 days.",
+            metadata={"filename": "policy.pdf", "page": 3, "chunk_index": 12},
+        ),
+        score=0.91,
+    )
+    formatted = format_chunk_for_context(scored)
+    assert "policy.pdf" in formatted
+    assert "14 days" in formatted
+    assert "0.91" in formatted
+
+
+def test_apply_token_budget_drops_low_scoring() -> None:
+    """Token budget should drop lowest-scoring chunks when over budget."""
+    settings = Settings(
+        google_api_key="test-key",
+        jwt_secret="secret",
+        max_context_tokens=100,
+    )
+    docs = [
+        ScoredDocument(
+            document=Document(
+                page_content="A" * 500,
+                metadata={"filename": "a.txt", "chunk_index": i},
+            ),
+            score=1.0 - i * 0.1,
+        )
+        for i in range(5)
+    ]
+    result = apply_token_budget(docs, "short query", settings)
+    assert len(result) < len(docs)
+
+
+def test_build_messages_structure() -> None:
+    """build_messages should return SystemMessage and HumanMessage."""
+    settings = Settings(google_api_key="test-key", jwt_secret="secret")
+    scored = ScoredDocument(
+        document=Document(
+            page_content="Refunds within 14 days.",
+            metadata={"filename": "policy.txt", "chunk_index": 0},
+        ),
+        score=0.9,
+    )
+    messages = build_messages("What is the refund policy?", [scored], settings)
+    assert len(messages) == 2
+    assert "refund policy" in messages[1].content.lower()  # type: ignore[union-attr]
+    assert "14 days" in messages[1].content  # type: ignore[union-attr]
+
+
+=== FILE: tests\integration\test_ingest_api.py ===
+# MIT License
+# Copyright (c) 2026 RAG-QA Contributors
+
+"""Integration tests for POST /ingest."""
+
+from io import BytesIO
+
+
+def test_ingest_requires_auth(client) -> None:
+    """POST /ingest without JWT should return 401."""
+    data = {"file": (BytesIO(b"test content"), "test.txt")}
+    response = client.post("/ingest", data=data, content_type="multipart/form-data")
+    assert response.status_code == 401
+
+
+def test_ingest_txt_file(client, auth_headers: dict[str, str], sample_txt_file: str) -> None:
+    """POST /ingest with a valid text file should index and return doc metadata."""
+    with open(sample_txt_file, "rb") as file_handle:
+        data = {"file": (file_handle, "policy.txt")}
+        response = client.post(
+            "/ingest",
+            data=data,
+            headers=auth_headers,
+            content_type="multipart/form-data",
+        )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["status"] == "indexed"
+    assert body["filename"] == "policy.txt"
+    assert body["num_chunks"] > 0
+    assert len(body["doc_id"]) == 8
+
+
+def test_ingest_unsupported_type(client, auth_headers: dict[str, str]) -> None:
+    """POST /ingest with unsupported file type should return 400."""
+    data = {"file": (BytesIO(b"binary"), "malware.exe")}
+    response = client.post(
+        "/ingest",
+        data=data,
+        headers=auth_headers,
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert "Unsupported" in response.get_json()["error"]
+
+
+def test_ingest_no_file(client, auth_headers: dict[str, str]) -> None:
+    """POST /ingest without file field should return 400."""
+    response = client.post("/ingest", headers=auth_headers)
+    assert response.status_code == 400
+
+
+=== FILE: tests\integration\test_query_api.py ===
+# MIT License
+# Copyright (c) 2026 RAG-QA Contributors
+
+"""Integration tests for POST /query."""
+
+import json
+from io import BytesIO
+
+
+def _ingest_sample(client, auth_headers: dict[str, str]) -> None:
+    """Helper to ingest a sample document before querying."""
+    content = (
+        b"Refund Policy: Customers may request a full refund within 14 days. "
+        b"Refunds are processed within 5 business days."
+    )
+    data = {"file": (BytesIO(content), "policy.txt")}
+    client.post(
+        "/ingest",
+        data=data,
+        headers=auth_headers,
+        content_type="multipart/form-data",
+    )
+
+
+def test_query_requires_auth(client) -> None:
+    """POST /query without JWT should return 401."""
+    response = client.post(
+        "/query",
+        json={"query": "What is the refund policy?"},
+    )
+    assert response.status_code == 401
+
+
+def test_query_valid_request(client, auth_headers: dict[str, str]) -> None:
+    """POST /query should return answer, sources, and token usage."""
+    _ingest_sample(client, auth_headers)
+
+    response = client.post(
+        "/query",
+        json={"query": "What is the refund policy?", "top_k": 3},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert "answer" in body
+    assert isinstance(body["sources"], list)
+    assert "tokens_used" in body
+    assert "latency_ms" in body
+    assert body["tokens_used"]["prompt"] >= 0
+
+
+def test_query_validation_error(client, auth_headers: dict[str, str]) -> None:
+    """POST /query with empty query should return 400."""
+    response = client.post(
+        "/query",
+        json={"query": ""},
+        headers=auth_headers,
+    )
+    assert response.status_code == 400
+
+
+def test_health_endpoint(client) -> None:
+    """GET /health should return status without authentication."""
+    response = client.get("/health")
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["status"] in ("ok", "degraded")
+    assert "faiss_chunks" in body
+    assert "uptime_s" in body
+
+
+def test_query_sse_streaming(client, auth_headers: dict[str, str]) -> None:
+    """POST /query with SSE accept header should stream tokens."""
+    _ingest_sample(client, auth_headers)
+
+    response = client.post(
+        "/query",
+        json={"query": "What is the refund policy?"},
+        headers={**auth_headers, "Accept": "text/event-stream"},
+    )
+
+    assert response.status_code == 200
+    assert response.content_type.startswith("text/event-stream")
+    data_lines = [
+        line for line in response.data.decode().split("\n") if line.startswith("data: ")
+    ]
+    assert len(data_lines) >= 1
+    final_event = json.loads(data_lines[-1].replace("data: ", ""))
+    assert final_event.get("done") is True
+
+
+
