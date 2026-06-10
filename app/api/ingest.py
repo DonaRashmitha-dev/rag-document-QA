@@ -1,4 +1,4 @@
-﻿import uuid
+import uuid
 
 import structlog
 from flask import Blueprint, jsonify, request
@@ -15,6 +15,9 @@ ingest_bp = Blueprint("ingest", __name__, url_prefix="/ingest")
 def extract_text(file, filename):
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     raw = file.read()
+    ALLOWED = {"pdf", "docx", "txt", "html", "csv"}
+    if ext not in ALLOWED:
+        raise ValueError(f"Unsupported file type: .{ext}")
     if ext == "pdf":
         import io
 
@@ -52,3 +55,4 @@ def ingest_document():
     except Exception as exc:
         logger.error("ingest_failed", error=str(exc), exc_info=True)
         return jsonify({"error": "Ingest failed: " + str(exc)}), 500
+
