@@ -170,3 +170,4 @@ Used as infrastructure: PostgreSQL, pgvector, Redis, Docker, Ollama (model servi
 ## Why This Project
 
 Most observability tools are black boxes. This project is an exercise in building the full stack — from raw log ingestion to vector search to LLM reasoning — with every layer visible and modifiable. The goal was to understand how production monitoring systems actually work, not just use them.
+
