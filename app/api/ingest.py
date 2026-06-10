@@ -57,3 +57,5 @@ def ingest_document():
     except Exception as exc:
         logger.error("ingest_failed", error=str(exc), exc_info=True)
         return jsonify({"error": "Ingest failed: " + str(exc)}), 500
+
+
