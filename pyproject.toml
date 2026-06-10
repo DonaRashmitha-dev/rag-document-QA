@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
     "flask==3.1.0",
+    "flask-cors",
     "langchain==0.3.27",
     "langchain-community==0.3.27",
     "langchain-google-genai==2.1.9",
@@ -67,3 +68,4 @@ warn_unused_configs = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
