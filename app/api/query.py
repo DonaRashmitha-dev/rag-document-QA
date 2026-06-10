@@ -1,4 +1,4 @@
-﻿# MIT License
+# MIT License
 # Copyright (c) 2024 Cursor AI
 
 import json
@@ -20,10 +20,7 @@ query_bp = Blueprint("query", __name__, url_prefix="/query")
 def _is_quota_error(error_text):
     error_lower = error_text.lower()
     keywords = ["quota", "rate limit", "429", "exceeded", "too many requests", "resource exhausted"]
-    for k in keywords:
-        if k in error_lower:
-            return True
-    return False
+    return any(k in error_lower for k in keywords)
 
 
 def _estimate_tokens(text):
@@ -148,3 +145,4 @@ def query_document():
             "error": "Internal server error during query: " + str(exc),
             "latency_ms": latency,
         }), 500
+
