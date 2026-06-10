@@ -12,21 +12,19 @@ from app.middleware.rate_limit import rate_limit
 logger = structlog.get_logger()
 ingest_bp = Blueprint("ingest", __name__, url_prefix="/ingest")
 
+ALLOWED_EXTENSIONS = {"pdf", "docx", "txt", "html", "csv"}
+
+
 def extract_text(file, filename):
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     raw = file.read()
-    ALLOWED = {"pdf", "docx", "txt", "html", "csv"}
-    if ext not in ALLOWED:
-        raise ValueError(f"Unsupported file type: .{ext}")
     if ext == "pdf":
         import io
-
         from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(raw))
         return "\n".join(page.extract_text() or "" for page in reader.pages)
     elif ext in ("docx",):
         import io
-
         from docx import Document
         doc = Document(io.BytesIO(raw))
         return "\n".join(p.text for p in doc.paragraphs)
@@ -35,6 +33,7 @@ def extract_text(file, filename):
             return raw.decode("utf-8")
         except UnicodeDecodeError:
             return raw.decode("latin-1")
+
 
 @ingest_bp.route("", methods=["POST"])
 @token_required
@@ -45,6 +44,9 @@ def ingest_document():
     file = request.files["file"]
     if file.filename == "":
         return jsonify({"error": "Empty filename"}), 400
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if ext not in ALLOWED_EXTENSIONS:
+        return jsonify({"error": f"Unsupported file type: .{ext}"}), 400
     try:
         text = extract_text(file, file.filename)
         doc_id = str(uuid.uuid4())[:8]
@@ -55,4 +57,3 @@ def ingest_document():
     except Exception as exc:
         logger.error("ingest_failed", error=str(exc), exc_info=True)
         return jsonify({"error": "Ingest failed: " + str(exc)}), 500
-
