@@ -20,11 +20,13 @@ def extract_text(file, filename):
     raw = file.read()
     if ext == "pdf":
         import io
+
         from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(raw))
         return "\n".join(page.extract_text() or "" for page in reader.pages)
     elif ext in ("docx",):
         import io
+
         from docx import Document
         doc = Document(io.BytesIO(raw))
         return "\n".join(p.text for p in doc.paragraphs)
