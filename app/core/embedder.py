@@ -1,11 +1,12 @@
 ﻿# MIT License
 # Copyright (c) 2024 Cursor AI
 
-import structlog
+
 import requests
-from typing import List, Any, Optional
+import structlog
 from langchain_core.embeddings import Embeddings
-from app.core.config import Settings, get_settings, EMBEDDING_DIMENSION
+
+from app.core.config import EMBEDDING_DIMENSION, get_settings
 
 logger = structlog.get_logger()
 

@@ -2,7 +2,6 @@
 # Copyright (c) 2024 Cursor AI
 
 import hashlib
-from typing import List, Optional
 
 from langchain_core.documents import Document
 
@@ -15,12 +14,12 @@ class _Splitter:
         self._chunk_overlap = chunk_overlap
 
 
-def create_splitter(settings: Optional[Settings] = None):
+def create_splitter(settings: Settings | None = None):
     cfg = settings or get_settings()
     return _Splitter(cfg.chunk_size, cfg.chunk_overlap)
 
 
-def chunk_documents(documents, settings: Optional[Settings] = None) -> List[Document]:
+def chunk_documents(documents, settings: Settings | None = None) -> list[Document]:
     cfg = settings or get_settings()
     if isinstance(documents, str):
         documents = [Document(page_content=documents, metadata={})]
@@ -30,7 +29,7 @@ def chunk_documents(documents, settings: Optional[Settings] = None) -> List[Docu
     splitter = create_splitter(cfg)
     chunk_size = splitter._chunk_size
     chunk_overlap = splitter._chunk_overlap
-    all_chunks: List[Document] = []
+    all_chunks: list[Document] = []
 
     for doc in documents:
         text = doc.page_content

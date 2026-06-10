@@ -3,11 +3,13 @@
 
 import json
 import time
+
 import structlog
-from flask import Blueprint, request, Response, jsonify
+from flask import Blueprint, Response, jsonify, request
+
 from app.core.config import get_settings
-from app.core.retriever import retrieve
 from app.core.llm import generate_answer, generate_answer_stream
+from app.core.retriever import retrieve
 from app.middleware.auth import token_required
 from app.middleware.rate_limit import rate_limit
 

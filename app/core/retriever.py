@@ -2,7 +2,8 @@
 # Copyright (c) 2024 Cursor AI
 
 from dataclasses import dataclass
-from typing import List, Any, Optional
+from typing import Any
+
 from app.core.config import Settings, get_settings
 from app.core.vector_store import get_vector_store
 
@@ -72,7 +73,7 @@ def deduplicate_chunks(docs, threshold=0.95):
     return unique
 
 
-def retrieve(query: str, top_k: int = 5, vector_store=None, settings: Optional[Settings] = None):
+def retrieve(query: str, top_k: int = 5, vector_store=None, settings: Settings | None = None):
     cfg = settings or get_settings()
     store = vector_store or get_vector_store(cfg)
 

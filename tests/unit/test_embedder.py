@@ -2,12 +2,18 @@
 # Copyright (c) 2026 RAG-QA Contributors
 
 from unittest.mock import MagicMock, patch
+
 import pytest
+
 from app.core.config import EMBEDDING_DIMENSION, Settings
 from app.core.embedder import (
-    embed_documents, embed_query, ensure_embeddings_object,
-    get_embeddings, reset_embeddings_cache,
+    embed_documents,
+    embed_query,
+    ensure_embeddings_object,
+    get_embeddings,
+    reset_embeddings_cache,
 )
+
 
 class TestGetEmbeddings:
     def test_returns_gemini_embeddings(self, mock_settings):

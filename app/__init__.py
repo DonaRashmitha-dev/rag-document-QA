@@ -1,7 +1,9 @@
 ﻿from flask import Flask
 from flask_cors import CORS
-from app.core.config import get_settings
+
 from app.api import health_bp, ingest_bp, query_bp
+from app.core.config import get_settings
+
 
 def create_app():
     app = Flask(__name__)

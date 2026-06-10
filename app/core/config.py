@@ -2,8 +2,6 @@
 # Copyright (c) 2024 Cursor AI
 
 from dataclasses import dataclass
-from typing import Optional
-
 
 EMBEDDING_DIMENSION = 768
 
@@ -32,7 +30,7 @@ class Settings:
     embedding_model: str = "models/embedding-001"
 
 
-_settings_instance: Optional[Settings] = None
+_settings_instance: Settings | None = None
 
 
 def get_settings() -> Settings:

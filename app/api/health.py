@@ -3,7 +3,9 @@
 # Copyright (c) 2024 Cursor AI
 
 import time
+
 from flask import Blueprint, jsonify
+
 from app.core.vector_store import get_vector_store
 
 health_bp = Blueprint("health", __name__, url_prefix="/health")

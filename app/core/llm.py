@@ -2,15 +2,17 @@
 # Copyright (c) 2024 Cursor AI
 
 import json
+from collections.abc import Generator
+
 import requests
 import structlog
-from typing import List, Dict, Any, Optional, Generator
+
 from app.core.config import Settings, get_settings
 
 logger = structlog.get_logger()
 
 
-def generate_answer(messages: List[Dict[str, str]], settings: Optional[Settings] = None) -> str:
+def generate_answer(messages: list[dict[str, str]], settings: Settings | None = None) -> str:
     cfg = settings or get_settings()
     url = cfg.ollama_base_url + "/api/chat"
     model = cfg.ollama_llm_model
@@ -26,7 +28,7 @@ def generate_answer(messages: List[Dict[str, str]], settings: Optional[Settings]
     return data.get("message", {}).get("content", "")
 
 
-def generate_answer_stream(messages: List[Dict[str, str]], settings: Optional[Settings] = None) -> Generator[str, None, None]:
+def generate_answer_stream(messages: list[dict[str, str]], settings: Settings | None = None) -> Generator[str, None, None]:
     cfg = settings or get_settings()
     url = cfg.ollama_base_url + "/api/chat"
     model = cfg.ollama_llm_model

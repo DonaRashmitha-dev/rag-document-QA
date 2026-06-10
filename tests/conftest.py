@@ -4,12 +4,15 @@
 import os
 import tempfile
 from unittest.mock import patch
+
 import pytest
+from langchain_core.embeddings import Embeddings
+
 from app import create_app
-from app.core.config import Settings, EMBEDDING_DIMENSION
+from app.core.config import EMBEDDING_DIMENSION, Settings
 from app.core.vector_store import reset_vector_store
 from app.middleware.auth import create_access_token
-from langchain_core.embeddings import Embeddings
+
 
 class FakeEmbeddings(Embeddings):
     def embed_documents(self, texts, settings=None):

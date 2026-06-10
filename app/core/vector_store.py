@@ -1,14 +1,15 @@
 ﻿# MIT License
 # Copyright (c) 2024 Cursor AI
 
-import os
 import json
+import os
 import uuid
-import structlog
-from typing import List, Dict, Any, Optional
-import numpy as np
+
 import faiss
-from app.core.config import Settings, get_settings
+import numpy as np
+import structlog
+
+from app.core.config import get_settings
 from app.core.embedder import embed_documents, embed_query
 
 logger = structlog.get_logger()
@@ -32,7 +33,7 @@ class VectorStoreManager:
         if os.path.exists(self.index_path) and os.path.exists(self.metadata_path):
             try:
                 self.index = faiss.read_index(self.index_path)
-                with open(self.metadata_path, "r", encoding="utf-8") as f:
+                with open(self.metadata_path, encoding="utf-8") as f:
                     self.metadata = json.load(f)
                 logger.info("faiss_index_loaded", count=len(self.metadata))
             except Exception as exc:
@@ -99,7 +100,7 @@ class VectorStoreManager:
         faiss.normalize_L2(query_np)
         scores, indices = self.index.search(query_np, k)
         results = []
-        for score, idx in zip(scores[0], indices[0]):
+        for score, idx in zip(scores[0], indices[0], strict=False):
             if idx < 0 or idx >= len(self.metadata):
                 continue
             meta = self.metadata[idx].copy()

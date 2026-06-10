@@ -1,9 +1,11 @@
 ﻿import uuid
+
 import structlog
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, jsonify, request
+
 from app.core.chunker import chunk_documents
-from app.core.vector_store import get_vector_store
 from app.core.config import get_settings
+from app.core.vector_store import get_vector_store
 from app.middleware.auth import token_required
 from app.middleware.rate_limit import rate_limit
 
@@ -15,11 +17,13 @@ def extract_text(file, filename):
     raw = file.read()
     if ext == "pdf":
         import io
+
         from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(raw))
         return "\n".join(page.extract_text() or "" for page in reader.pages)
     elif ext in ("docx",):
         import io
+
         from docx import Document
         doc = Document(io.BytesIO(raw))
         return "\n".join(p.text for p in doc.paragraphs)
