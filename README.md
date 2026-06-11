@@ -1,4 +1,4 @@
-# 🔍 RAG Document Q&A System
+# RAG Document Q&A System
 
 > Upload any document. Ask anything. Get answers with sources — powered entirely by local AI, no API keys, no cloud, no cost.
 
@@ -12,7 +12,14 @@ A production-grade **Retrieval-Augmented Generation (RAG)** pipeline that runs *
 
 ---
 
-## ✨ Features
+## Screenshots
+
+![Document Ingestion](screenshot%201.png)
+![RAG Answer](screenshot%202.png)
+
+---
+
+## Features
 
 | Feature | Details |
 |---|---|
@@ -27,102 +34,66 @@ A production-grade **Retrieval-Augmented Generation (RAG)** pipeline that runs *
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```
-┌─────────────┐     ┌──────────┐     ┌─────────────┐     ┌──────────────────┐
-│  Document   │────▶│  Loader  │────▶│   Chunker   │────▶│    Embedder      │
-│ (PDF/DOCX/  │     │          │     │ (512 chars, │     │ nomic-embed-text │
-│  TXT/HTML)  │     │          │     │  64 overlap)│     │ via Ollama       │
-└─────────────┘     └──────────┘     └─────────────┘     └───────┬──────────┘
-                                                                   │
-                                                          ┌────────▼────────┐
-                                                          │  FAISS Index +  │
-                                                          │ Metadata Store  │
-                                                          └────────┬────────┘
-                                                                   │
-┌─────────────┐     ┌──────────┐     ┌─────────────┐     ┌────────▼────────┐
-│   Answer +  │◀────│tinyllama │◀────│   Prompt    │◀────│   Retriever     │
-│   Sources   │     │via Ollama│     │   Builder   │     │  (MMR rerank,   │
-│             │     │localhost │     │             │     │   top-k=5)      │
-└─────────────┘     └──────────┘     └─────────────┘     └─────────────────┘
+Document → Loader → Chunker → Embedder (nomic-embed-text) → FAISS Index
+                                                                   |
+Answer + Sources ← tinyllama ← Prompt Builder ← Retriever (MMR, top-k=5)
 ```
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
-- Python 3.11+ (3.14 works, 3.11/3.12 recommended)
+- Python 3.11+
 - [Ollama](https://ollama.com) installed and running
 - Node.js (only for the React frontend)
 
 ### 1. Install Ollama & Pull Models
 
-Download Ollama from [ollama.com](https://ollama.com), then pull the required models:
-
 ```bash
-ollama pull nomic-embed-text   # embeddings model
-ollama pull tinyllama          # LLM (fast, runs on CPU)
+ollama pull nomic-embed-text
+ollama pull tinyllama
 ```
 
-Verify Ollama is running:
+Want better answers? Use a smarter model:
 ```bash
-ollama list
-# Should show both models
+ollama pull phi3:mini
+# Then set ollama_llm_model = "phi3:mini" in app/core/config.py
 ```
-
-> **Want better answers?** Swap tinyllama for a smarter model:
-> ```bash
-> ollama pull gemma:2b    # better quality, still lightweight
-> ollama pull phi3:mini   # Microsoft's efficient model
-> ```
-> Then set `OLLAMA_LLM_MODEL=gemma:2b` in your `.env`.
 
 ### 2. Clone & Configure
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/rag_project.git
-cd rag_project
+git clone https://github.com/DonaRashmitha-dev/rag-document-QA.git
+cd rag-document-QA
 cp .env.example .env
 ```
 
-Open `.env` and set at minimum:
+Open `.env` and set:
 ```env
-JWT_SECRET=any-random-secret-string-you-choose
+JWT_SECRET=any-random-secret-string
 ```
 
-Everything else has sensible defaults. Ollama runs at `http://localhost:11434` by default.
-
-### 3. Install Dependencies
+### 3. Install & Run
 
 ```bash
 pip install -e ".[dev]"
-```
-
-### 4. Start the Backend
-
-```bash
 flask --app app:create_app run --port 8000
 ```
 
-Verify:
-```bash
-curl http://127.0.0.1:8000/health
-# {"faiss_chunks": 0, "status": "ok", "uptime_s": 2.1}
-```
-
-### 5. Start the Frontend (Optional)
+### 4. Frontend (Optional)
 
 ```bash
 cd rag-frontend
 npm install
 npm start
-# Opens http://localhost:3000 automatically
 ```
 
-### 6. Docker (All-in-one)
+### 5. Docker
 
 ```bash
 docker compose up --build
@@ -130,37 +101,33 @@ docker compose up --build
 
 ---
 
-## 🔑 Getting Your JWT Token
-
-All API routes (except `/health`) require a Bearer token. Generate one:
+## Getting Your JWT Token
 
 ```bash
-# Run from project root with dependencies installed
-python -c "from app.middleware.auth import create_access_token; print(create_access_token())"
+python -c "
+import jwt
+from datetime import datetime, timedelta, timezone
+payload = {
+    'sub': 'rag-qa-client',
+    'iat': datetime.now(timezone.utc),
+    'exp': datetime.now(timezone.utc) + timedelta(hours=24)
+}
+print(jwt.encode(payload, 'your-jwt-secret', algorithm='HS256'))
+"
 ```
 
-Copy the printed token and use it in all requests:
-```
-Authorization: Bearer <your-token-here>
-```
-
-> Tokens are signed with your `JWT_SECRET`. Changing the secret invalidates existing tokens.
+Use the printed token as: `Authorization: Bearer <token>`
 
 ---
 
-## 📡 API Usage
+## API Usage
 
 ### Ingest a Document
 
 ```bash
 curl -X POST http://localhost:8000/ingest \
   -H "Authorization: Bearer <token>" \
-  -F "file=@/path/to/your/document.pdf"
-```
-
-**Response:**
-```json
-{"chunks_added": 42, "filename": "document.pdf", "status": "ok"}
+  -F "file=@document.pdf"
 ```
 
 ### Query
@@ -172,26 +139,15 @@ curl -X POST http://localhost:8000/query \
   -d '{"query": "What is the refund policy?", "top_k": 5}'
 ```
 
-**Response:**
-```json
-{
-  "answer": "The refund policy allows returns within 30 days...",
-  "sources": [
-    {"chunk": "Returns are accepted within 30 days...", "score": 0.92, "source": "policy.pdf"}
-  ]
-}
-```
-
 ### Health Check
 
 ```bash
 curl http://localhost:8000/health
-# {"faiss_chunks": 148, "status": "ok", "uptime_s": 28.9}
 ```
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
 | Variable | Default | Description |
 |---|---|---|
@@ -200,14 +156,12 @@ curl http://localhost:8000/health
 | `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Embedding model |
 | `OLLAMA_LLM_MODEL` | `tinyllama` | LLM for answer generation |
 | `CHUNK_SIZE` | `512` | Text chunk size in characters |
-| `CHUNK_OVERLAP` | `64` | Overlap between consecutive chunks |
+| `CHUNK_OVERLAP` | `64` | Overlap between chunks |
 | `TOP_K` | `5` | Chunks retrieved per query |
-| `SCORE_THRESHOLD` | `0.7` | Minimum relevance score |
-| `MAX_CONTEXT_TOKENS` | `12000` | Token budget for context |
 
 ---
 
-## 🧪 Running Tests
+## Running Tests
 
 ```bash
 pytest tests/ -v --cov=app --cov-report=term-missing
@@ -215,24 +169,14 @@ pytest tests/ -v --cov=app --cov-report=term-missing
 
 ---
 
-## 💸 Cost
+## Cost
 
 **Completely free. Runs offline. No API keys.**
 
-All inference happens locally via Ollama. Once models are downloaded, zero ongoing cost and zero data leaves your machine.
-
----
-
-## 📖 API Specification
-
-Full OpenAPI spec in [`openapi.yaml`](./openapi.yaml).
+All inference happens locally via Ollama. Zero ongoing cost, zero data leaves your machine.
 
 ---
 
 ## License
 
-MIT — free to use, modify, and distribute.
-
-
-
-
+MIT
