@@ -21,8 +21,8 @@ Most RAG tutorials rely on paid APIs like OpenAI or Gemini which means your priv
 
 ## Screenshots
 
-![Document Ingestion](screenshot%201.png)
-![RAG Answer](screenshot%202.png)
+![Document Ingestion](dashboard1.png)
+![RAG Answer](dashboard2.png)
 
 ---
 
@@ -256,5 +256,6 @@ MIT free to use, modify, and distribute.
 
 ![Dashboard](dashboard1.png)
 ![Dashboard 2](dashboard2.png)
+
 
 
