@@ -1,6 +1,6 @@
 # RAG Document Q&A System
 
-> Upload any document. Ask anything. Get cited answers — powered 100% locally. No API keys, no cloud, no cost.
+> Upload any document. Ask anything. Get cited answers powered 100% locally. No API keys, no cloud, no cost.
 
 ![Python](https://img.shields.io/badge/Python-3.11+-blue?logo=python&logoColor=white)
 ![Flask](https://img.shields.io/badge/Flask-3.1-black?logo=flask)
@@ -8,9 +8,14 @@
 ![Ollama](https://img.shields.io/badge/Ollama-Local_LLM-black)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-A production-grade **Retrieval-Augmented Generation (RAG)** system that runs entirely on your machine. Upload PDFs, Word docs, CSVs, or any text file — then ask questions in plain English and get accurate, sourced answers powered by a local LLM.
+A production grade **Retrieval-Augmented Generation (RAG)** system that runs entirely on your machine. Upload PDFs, Word docs, CSVs, or any text file then ask questions in plain English and get accurate, sourced answers powered by a local LLM.
 
 No OpenAI. No Gemini. No subscriptions. Everything runs offline.
+
+Why I Built This
+
+Most RAG tutorials rely on paid APIs like OpenAI or Gemini which means your private documents get sent to third-party servers, and every query costs money. I wanted to build a production-grade RAG system that runs entirely on your own machine: no subscriptions, no data leaving your device, no vendor lock-in. This project proves that with the right open-source tools (Ollama + FAISS + Flask), you can build enterprise quality document Q&A that anyone can run for free.
+
 
 ---
 
@@ -25,7 +30,7 @@ No OpenAI. No Gemini. No subscriptions. Everything runs offline.
 
 Large Language Models (LLMs) are powerful but have two problems:
 1. They don't know your private documents
-2. They hallucinate — making up facts confidently
+2. They hallucinate making up facts confidently
 
 RAG fixes both. Instead of asking the LLM to recall facts from training, we:
 1. **Retrieve** the most relevant chunks from your documents using vector search
@@ -41,7 +46,7 @@ The result: accurate, cited answers from your own documents.
 ```
 ┌─────────────┐     ┌──────────┐     ┌─────────────┐     ┌──────────────────┐
 │  Document   │────▶│  Loader  │────▶│   Chunker   │────▶│    Embedder      │
-│ (PDF/DOCX/  │     │          │     │ (512 chars, │     │ nomic-embed-text │
+│ (PDF/DOCX/  │     │          │     │ (512 chars, │     │ nomic embed text │
 │  TXT/HTML)  │     │          │     │  64 overlap)│     │ via Ollama       │
 └─────────────┘     └──────────┘     └─────────────┘     └───────┬──────────┘
                                                                    │
@@ -53,7 +58,7 @@ The result: accurate, cited answers from your own documents.
 ┌─────────────┐     ┌──────────┐     ┌─────────────┐     ┌────────▼────────┐
 │   Answer +  │◀────│tinyllama │◀────│   Prompt    │◀────│   Retriever     │
 │   Sources   │     │via Ollama│     │   Builder   │     │  (MMR rerank,   │
-│             │     │localhost │     │             │     │   top-k=5)      │
+│             │     │localhost │     │             │     │   top-k=3)      │
 └─────────────┘     └──────────┘     └─────────────┘     └─────────────────┘
 ```
 
@@ -67,12 +72,12 @@ The result: accurate, cited answers from your own documents.
 
 | Component | Technology | Why This, Not That |
 |---|---|---|
-| **LLM** | Ollama (tinyllama / phi3:mini) | Runs locally — no API costs, no data leaving your machine. OpenAI/Gemini require subscriptions and send your data to the cloud. |
-| **Embeddings** | nomic-embed-text via Ollama | Free, local, high quality. Comparable to OpenAI embeddings but zero cost and fully offline. |
-| **Vector Store** | FAISS | Facebook's battle-tested library. Sub-millisecond search on millions of vectors. No database server needed — just files on disk. Pinecone/Weaviate require hosted infrastructure. |
+| **LLM** | Ollama (tinyllama / phi3:mini) | Runs locally no API costs, no data leaving your machine. OpenAI/Gemini require subscriptions and send your data to the cloud. |
+| **Embeddings** | nomic embed text via Ollama | Free, local, high quality. Comparable to OpenAI embeddings but zero cost and fully offline. |
+| **Vector Store** | FAISS | Facebook's battle tested library. Sub millisecond search on millions of vectors. No database server needed just files on disk. Pinecone/Weaviate require hosted infrastructure. |
 | **Backend** | Flask | Lightweight, simple REST API. FastAPI would work too, but Flask has less overhead for this use case. |
-| **Auth** | JWT (PyJWT) | Stateless — no session store needed. Tokens are signed and verified locally. |
-| **Frontend** | React | Clean UI for non-technical users to upload docs and ask questions without touching the API directly. |
+| **Auth** | JWT (PyJWT) | Stateless no session store needed. Tokens are signed and verified locally. |
+| **Frontend** | React | Clean UI for non technical users to upload docs and ask questions without touching the API directly. |
 
 ---
 
@@ -82,11 +87,11 @@ The result: accurate, cited answers from your own documents.
 |---|---|
 | **Multi-format ingestion** | PDF, DOCX, TXT, HTML, CSV |
 | **FAISS vector search** | Sub-second L2 search with MMR reranking |
-| **Local embeddings** | `nomic-embed-text` — no cloud calls |
-| **Local LLM** | `tinyllama` or `phi3:mini` — runs on CPU |
+| **Local embeddings** | `nomic-embed-text` no cloud calls |
+| **Local LLM** | `tinyllama` or `phi3:mini` runs on CPU |
 | **Source attribution** | Every answer cites the source chunk and relevance score |
 | **JWT authentication** | Stateless token auth on all routes |
-| **Rate limiting** | Token-bucket per-IP limiter |
+| **Rate limiting** | Token-bucket per IP limiter |
 | **Observability** | structlog JSON logging + Prometheus metrics |
 | **Docker ready** | Single `docker compose up` deployment |
 
@@ -245,4 +250,4 @@ pytest tests/ -v --cov=app --cov-report=term-missing
 
 ## License
 
-MIT — free to use, modify, and distribute.
+MIT free to use, modify, and distribute.
