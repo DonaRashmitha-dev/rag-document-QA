@@ -254,6 +254,7 @@ MIT free to use, modify, and distribute.
 
 ## Screenshots
 
-![Dashboard](dashboardhtml%201.png)
-![Dashboard 2](dashboardhtml%202.png)
+![Dashboard](dashboard1.png)
+![Dashboard 2](dashboard2.png)
+
 
