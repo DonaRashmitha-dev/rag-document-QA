@@ -1,3 +1,8 @@
+## ?? Screenshots
+
+![Document Ingestion](screenshot%201.png)
+![RAG Answer](screenshot%202.png)
+
 # 🔍 RAG Document Q&A System
 
 > Upload any document. Ask anything. Get answers with sources — powered entirely by local AI, no API keys, no cloud, no cost.
@@ -232,3 +237,4 @@ Full OpenAPI spec in [`openapi.yaml`](./openapi.yaml).
 ## License
 
 MIT — free to use, modify, and distribute.
+
