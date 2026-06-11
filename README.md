@@ -251,3 +251,9 @@ pytest tests/ -v --cov=app --cov-report=term-missing
 ## License
 
 MIT free to use, modify, and distribute.
+
+## Screenshots
+
+![Dashboard](dashboardhtml%201.png)
+![Dashboard 2](dashboardhtml%202.png)
+
