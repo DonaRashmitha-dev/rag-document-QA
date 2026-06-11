@@ -1,4 +1,4 @@
-﻿# MIT License
+# MIT License
 # Copyright (c) 2024 Cursor AI
 
 from dataclasses import dataclass
@@ -26,7 +26,7 @@ class ScoredDocument:
                 self.text = str(self.document)
 
 
-def _mmr_rerank(docs, top_k, lambda_mult=0.5):
+def _mmr_rerank(docs, top_k, lambda_mult=0.7):
     if not docs:
         return []
     selected = []
@@ -36,12 +36,16 @@ def _mmr_rerank(docs, top_k, lambda_mult=0.5):
         best_idx = 0
         for i, doc in enumerate(remaining):
             relevance = doc.score
-            diversity = 0.0
             if selected:
-                texts = [d.text for d in selected]
-                diversity = min(1.0 - (len(doc.text) / max(len(t), 1)) for t in texts) if texts else 0.0
-                diversity = max(0.0, diversity)
-            mmr_score = lambda_mult * relevance - (1 - lambda_mult) * diversity
+                overlap = max(
+                    len(set(doc.text.split()) & set(d.text.split())) /
+                    max(len(set(doc.text.split())), 1)
+                    for d in selected
+                )
+                diversity = 1.0 - overlap
+            else:
+                diversity = 1.0
+            mmr_score = lambda_mult * relevance + (1 - lambda_mult) * diversity
             if mmr_score > best_score:
                 best_score = mmr_score
                 best_idx = i
@@ -116,3 +120,4 @@ def retrieve(query: str, top_k: int = 5, vector_store=None, settings: Settings |
     docs = deduplicate_chunks(docs)
     docs = sorted(docs, key=lambda x: x.score, reverse=True)
     return docs[:top_k]
+

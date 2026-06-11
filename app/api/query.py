@@ -8,6 +8,7 @@ import structlog
 from flask import Blueprint, Response, jsonify, request
 
 from app.core.config import get_settings
+from app.core.prompt import build_messages, apply_token_budget
 from app.core.llm import generate_answer, generate_answer_stream
 from app.core.retriever import retrieve
 from app.middleware.auth import token_required
@@ -40,7 +41,8 @@ def query_document():
 
         stream = data.get("stream", False) or request.headers.get("Accept", "").startswith("text/event-stream")
         cfg = get_settings()
-        docs = retrieve(query, top_k=cfg.top_k)
+        top_k = int(data.get("top_k", cfg.top_k))
+        docs = retrieve(query, top_k=top_k)
 
         if not docs:
             latency = round((time.time() - start_time) * 1000, 2)
@@ -58,18 +60,10 @@ def query_document():
                 return Response(empty_stream(), mimetype="text/event-stream", content_type="text/event-stream")
             return jsonify(resp_body), 200
 
-        context_parts = []
-        for i, doc in enumerate(docs):
-            idx = str(i + 1)
-            context_parts.append("[Source " + idx + "] " + doc.text)
-        context = "\n\n".join(context_parts)
 
-        system_msg = "You are a helpful assistant. Use the provided context to answer the question. Cite sources like [Source 1], [Source 2]."
-        user_msg = "Context:\n" + context + "\n\nQuestion: " + query + "\n\nAnswer:"
-        messages = [
-            {"role": "system", "content": system_msg},
-            {"role": "user", "content": user_msg},
-        ]
+        docs = apply_token_budget(docs, query)
+        lc_messages = build_messages(query, docs)
+        messages = [{"role": "system" if m.__class__.__name__ == "SystemMessage" else "user", "content": m.content} for m in lc_messages]
 
         if stream:
             def event_stream():
@@ -101,7 +95,7 @@ def query_document():
                     else:
                         payload = json.dumps({"error": error_text})
                         yield "data: " + payload + "\n\n"
-            return Response(event_stream(), mimetype="text/event-stream", content_type="text/event-stream")
+            return Response(event_stream(), mimetype="text/event-stream", content_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
         try:
             answer = generate_answer(messages)
@@ -118,7 +112,7 @@ def query_document():
             else:
                 raise
 
-        prompt_tokens = _estimate_tokens(context + query)
+        prompt_tokens = _estimate_tokens(query)
         completion_tokens = _estimate_tokens(answer)
         latency = round((time.time() - start_time) * 1000, 2)
         sources = []
@@ -145,4 +139,8 @@ def query_document():
             "error": "Internal server error during query: " + str(exc),
             "latency_ms": latency,
         }), 500
+
+
+
+
 

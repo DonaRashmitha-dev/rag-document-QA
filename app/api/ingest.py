@@ -12,7 +12,7 @@ from app.middleware.rate_limit import rate_limit
 logger = structlog.get_logger()
 ingest_bp = Blueprint("ingest", __name__, url_prefix="/ingest")
 
-ALLOWED_EXTENSIONS = {"pdf", "docx", "txt", "html", "csv"}
+ALLOWED_EXTENSIONS = {"pdf", "docx", "txt", "html", "csv", "yaml", "yml", "json", "md"}
 
 
 def extract_text(file, filename):
@@ -52,7 +52,9 @@ def ingest_document():
     try:
         text = extract_text(file, file.filename)
         doc_id = str(uuid.uuid4())[:8]
-        chunks = chunk_documents(text, get_settings())
+        from langchain_core.documents import Document
+        doc_obj = Document(page_content=text, metadata={"filename": file.filename, "source": file.filename})
+        chunks = chunk_documents([doc_obj], get_settings())
         store = get_vector_store()
         count = store.add_documents(chunks, doc_id=doc_id)
         return jsonify({"status": "indexed", "filename": file.filename, "doc_id": doc_id, "num_chunks": count}), 200

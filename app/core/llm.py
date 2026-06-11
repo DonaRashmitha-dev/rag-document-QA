@@ -20,7 +20,7 @@ def generate_answer(messages: list[dict[str, str]], settings: Settings | None = 
         "model": model,
         "messages": messages,
         "stream": False,
-        "options": {"temperature": 0.7},
+        "options": {"temperature": 0.1},
     }
     resp = requests.post(url, json=payload)
     resp.raise_for_status()
@@ -36,7 +36,7 @@ def generate_answer_stream(messages: list[dict[str, str]], settings: Settings | 
         "model": model,
         "messages": messages,
         "stream": True,
-        "options": {"temperature": 0.7},
+        "options": {"temperature": 0.1},
     }
     resp = requests.post(url, json=payload, stream=True)
     resp.raise_for_status()

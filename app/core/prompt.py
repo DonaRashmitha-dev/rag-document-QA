@@ -1,4 +1,4 @@
-﻿# MIT License
+# MIT License
 # Copyright (c) 2024 Cursor AI
 
 
@@ -8,9 +8,13 @@ from app.core.config import get_settings
 from app.core.retriever import ScoredDocument
 
 SYSTEM_PROMPT = (
-    "You are a helpful assistant. Answer the user question using ONLY the "
-    "provided context. Cite sources by filename when relevant. If the context "
-    "does not contain enough information, say so."
+    "You are a document question-answering assistant. "
+    "Answer using ONLY the context provided below. "
+    "Do NOT use any prior knowledge or make up information. "
+    "If the answer is not in the context, say exactly: "
+    "'I could not find this information in the provided documents.' "
+    "Keep your answer concise: 2-3 sentences maximum. "
+    "Cite the source filename for every claim."
 )
 
 def count_tokens(text: str) -> int:
@@ -44,3 +48,4 @@ def build_messages(query: str, docs: list[ScoredDocument], settings=None) -> lis
     context = "\n\n".join(format_chunk_for_context(d) for d in docs)
     human_text = "Context:\n" + context + "\n\nQuestion: " + query
     return [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=human_text)]
+
