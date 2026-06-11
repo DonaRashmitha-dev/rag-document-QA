@@ -8,8 +8,8 @@ import structlog
 from flask import Blueprint, Response, jsonify, request
 
 from app.core.config import get_settings
-from app.core.prompt import build_messages, apply_token_budget
 from app.core.llm import generate_answer, generate_answer_stream
+from app.core.prompt import apply_token_budget, build_messages
 from app.core.retriever import retrieve
 from app.middleware.auth import token_required
 from app.middleware.rate_limit import rate_limit
@@ -139,6 +139,7 @@ def query_document():
             "error": "Internal server error during query: " + str(exc),
             "latency_ms": latency,
         }), 500
+
 
 
 
